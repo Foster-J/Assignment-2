@@ -352,28 +352,31 @@ app.get("/messages/:groupId", async (req, res) => {
     const groupId = req.params.groupId;
 
     try {
-        // Get the last viewed timestamp for the user
+        const [groupNameResult] = await global.db.execute(
+            "SELECT group_name FROM ChatRoom WHERE ChatRoom_ID = ?",
+            [groupId]
+        );
+
+        if (groupNameResult.length === 0) {
+            return res.status(404).send("Group not found.");
+        }
+
+        const groupName = groupNameResult[0].group_name;
+
         const [lastViewedResult] = await global.db.execute(
             "SELECT last_viewed FROM Room_Member WHERE Person_ID = ? AND ChatRoom_ID = ?",
             [userId, groupId]
         );
 
-        const [groupNameResult] = await global.db.execute(
-            "SELECT group_name FROM ChatRoom WHERE ChatRoom_ID = ?",
-            [groupId]
-        );
-        
-
         const lastViewed = lastViewedResult.length > 0 ? lastViewedResult[0].last_viewed : "2000-01-01 00:00:00";
 
-        // Fetch messages, marking which ones are unread
         const [messages] = await global.db.execute(
             `SELECT M.Message_ID, M.body_text, M.sent_date, P.username, M.Person_ID,
                     (SELECT GROUP_CONCAT(E.emoji SEPARATOR ' ') FROM EmojiReaction E WHERE E.Message_ID = M.Message_ID) AS reactions
-             FROM Message M
-             JOIN Person P ON M.Person_ID = P.Person_ID
-             WHERE M.ChatRoom_ID = ?
-             ORDER BY M.sent_date ASC`,
+            FROM Message M
+            JOIN Person P ON M.Person_ID = P.Person_ID
+            WHERE M.ChatRoom_ID = ?
+            ORDER BY M.sent_date ASC`,
             [groupId]
         );
 
@@ -381,12 +384,12 @@ app.get("/messages/:groupId", async (req, res) => {
             <!DOCTYPE html>
             <html>
             <head>
-                <title>Group Chat</title>
+                <title>${groupName}</title>
                 <link rel="stylesheet" href="/style.css">
             </head>
             <body>
                 <div class="chat-container">
-                    <h2>Group Chat</h2>
+                    <h2>${groupName}</h2>
                     <div id="chat-box">`;
 
         let unreadSeparatorAdded = false;
@@ -395,17 +398,30 @@ app.get("/messages/:groupId", async (req, res) => {
             const msgClass = msg.Person_ID === userId ? "sent" : "received";
             const isUnread = new Date(msg.sent_date) > new Date(lastViewed);
 
-            // Insert the red line **only once** when the first unread message is found
             if (isUnread && !unreadSeparatorAdded) {
                 html += `<div class="unread-separator">Unread Messages Below</div>`;
                 unreadSeparatorAdded = true;
             }
+
+            // Render message with reactions as image emojis
+            const emojiImages = msg.reactions ? msg.reactions.split(' ').map(emoji => {
+                return `<img src="/emojis/${emoji}.png" alt="${emoji}" class="emoji-image">`;
+            }).join(' ') : 'No reactions yet';
 
             html += `
                 <div class="message-container ${msgClass}">
                     <div class="message ${msgClass}">
                         <strong>${msg.username}</strong>: ${msg.body_text}
                         <br><small>${msg.sent_date}</small>
+                        <div class="reactions">
+                            ${emojiImages}
+                        </div>
+                        <button class="reaction-btn" data-message-id="${msg.Message_ID}">+</button>
+                        <div class="emoji-picker" id="emoji-picker-${msg.Message_ID}" style="display: none;">
+                            <img src="/emojis/thumbs_up.png" alt="thumbs_up" class="emoji-image" data-emoji="thumbs_up">
+                            <img src="/emojis/thumbs_down.png" alt="thumbs_down" class="emoji-image" data-emoji="thumbs_down">
+                            
+                        </div>
                     </div>
                 </div>`;
         });
@@ -418,9 +434,9 @@ app.get("/messages/:groupId", async (req, res) => {
                     </form>
                 </div>
             </body>
+            <script src="/script.js"></script>
             </html>`;
 
-        // Update last viewed timestamp to mark messages as read
         await global.db.execute(
             "UPDATE Room_Member SET last_viewed = NOW() WHERE Person_ID = ? AND ChatRoom_ID = ?",
             [userId, groupId]
@@ -432,7 +448,6 @@ app.get("/messages/:groupId", async (req, res) => {
         res.send("Error loading messages.");
     }
 });
-
 
 app.post("/sendMessage/:chatRoomId", async (req, res) => {
     if (!req.session.authenticated) {
@@ -459,6 +474,32 @@ app.post("/sendMessage/:chatRoomId", async (req, res) => {
         res.status(500).send("Error sending message.");
     }
 });
+
+app.post("/addReaction/:messageId", async (req, res) => {
+    if (!req.session.authenticated) {
+        return res.status(401).send("Unauthorized");
+    }
+
+    const userId = req.session.userId;
+    const messageId = req.params.messageId;
+    const emoji = req.body.emoji;
+
+    try {
+        // Insert emoji reaction into the database
+        await global.db.execute(
+            "INSERT INTO EmojiReaction (Message_ID, Person_ID, emoji) VALUES (?, ?, ?)",
+            [messageId, userId, emoji]
+        );
+
+        // Redirect back to the messages page to update the reactions
+        res.redirect(`/messages/${req.params.groupId}`);
+    } catch (err) {
+        console.error("Error adding reaction:", err);
+        res.status(500).send("Error adding reaction.");
+    }
+});
+
+
 
 
 

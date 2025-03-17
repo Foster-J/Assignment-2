@@ -106,4 +106,34 @@ form button:hover {
     background-color: #ffcccc; /* Lighter red for others' unread messages */
 }
 
+/* Add these styles to your CSS file */
+.message-container {
+    margin-bottom: 20px;
+}
+
+.reaction-btn {
+    background-color: transparent;
+    border: none;
+    font-size: 20px;
+    cursor: pointer;
+}
+
+.emoji-picker {
+    display: flex;
+    gap: 10px;
+    margin-top: 10px;
+}
+
+.emoji-picker img {
+    width: 30px;
+    height: 30px;
+    cursor: pointer;
+}
+
+.emoji-image {
+    width: 20px;
+    height: 20px;
+}
+
+
 
