@@ -388,7 +388,7 @@ app.post("/joinGroup", async (req, res) => {
     }
 });
 
-app.get("/messages/:groupId", checkRoomAuthorization ,async (req, res) => {
+app.get("/messages/:groupId", checkRoomAuthorization, async (req, res) => {
     if (!req.session.authenticated) {
         return res.status(401).send("Unauthorized");
     }
@@ -407,6 +407,13 @@ app.get("/messages/:groupId", checkRoomAuthorization ,async (req, res) => {
         }
 
         const groupName = groupNameResult[0].group_name;
+
+        // Fetch users who are not in the group
+        const [availableUsers] = await global.db.execute(
+            `SELECT Person_ID, username FROM Person WHERE Person_ID NOT IN 
+                (SELECT Person_ID FROM Room_Member WHERE ChatRoom_ID = ?)`,
+            [groupId]
+        );
 
         const [lastViewedResult] = await global.db.execute(
             "SELECT last_viewed FROM Room_Member WHERE Person_ID = ? AND ChatRoom_ID = ?",
@@ -435,6 +442,24 @@ app.get("/messages/:groupId", checkRoomAuthorization ,async (req, res) => {
             <body>
                 <div class="chat-container">
                     <h2>${groupName}</h2>
+
+                    <!-- Invite More People Section (At the top) -->
+                    <form action="/inviteToGroup/${groupId}" method="post">
+                        <select name="users[]" multiple>
+        `;
+
+        availableUsers.forEach((user) => {
+            html += `
+                <option value="${user.Person_ID}">${user.username}</option>
+            `;
+        });
+
+        html += `
+                        </select>
+                        <br><button type="submit">Invite</button>
+                    </form>
+                    <br> <!-- Add some space between the form and the messages -->
+
                     <div id="chat-box">`;
 
         let unreadSeparatorAdded = false;
@@ -448,7 +473,6 @@ app.get("/messages/:groupId", checkRoomAuthorization ,async (req, res) => {
                 unreadSeparatorAdded = true;
             }
 
-            // Render message with reactions as image emojis
             const emojiImages = msg.reactions ? msg.reactions.split(' ').map(emoji => {
                 return `<img src="/emojis/${emoji}.png" alt="${emoji}" class="emoji-image">`;
             }).join(' ') : 'No reactions yet';
@@ -465,27 +489,16 @@ app.get("/messages/:groupId", checkRoomAuthorization ,async (req, res) => {
                         <div class="emoji-picker" id="emoji-picker-${msg.Message_ID}" style="display: none;">
                             <img src="/emojis/thumbs_up.png" alt="thumbs_up" class="emoji-image" data-emoji="thumbs_up">
                             <img src="/emojis/thumbs_down.png" alt="thumbs_down" class="emoji-image" data-emoji="thumbs_down">
-                            
                         </div>
                     </div>
-                </div>`;
+                </div>
+            `;
         });
 
-        html += `
-                    </div>
-                    <form action="/sendMessage/${groupId}" method="POST">
-                        <input type="text" name="message" required>
-                        <button type="submit">Send</button>
-                    </form>
-                </div>
-            </body>
-            <script src="/script.js"></script>
-            </html>`;
+        html += `</div>`;
 
-        await global.db.execute(
-            "UPDATE Room_Member SET last_viewed = NOW() WHERE Person_ID = ? AND ChatRoom_ID = ?",
-            [userId, groupId]
-        );
+        html += `<a href="/groups">Back to Groups</a>`;
+        html += `</div></body></html>`;
 
         res.send(html);
     } catch (err) {
@@ -493,6 +506,8 @@ app.get("/messages/:groupId", checkRoomAuthorization ,async (req, res) => {
         res.send("Error loading messages.");
     }
 });
+
+
 
 app.post("/sendMessage/:chatRoomId", async (req, res) => {
     if (!req.session.authenticated) {
@@ -519,6 +534,32 @@ app.post("/sendMessage/:chatRoomId", async (req, res) => {
         res.status(500).send("Error sending message.");
     }
 });
+
+app.post("/inviteToGroup/:groupId", async (req, res) => {
+    if (!req.session.authenticated) {
+        return res.status(401).send("Unauthorized");
+    }
+
+    const groupId = req.params.groupId;
+    const userId = req.session.userId;
+    const invitedUsers = req.body.users || []; // Get selected users
+
+    try {
+        for (const userIdToAdd of invitedUsers) {
+            // Insert each selected user into the Room_Member table
+            await global.db.execute(
+                "INSERT INTO Room_Member (ChatRoom_ID, Person_ID) VALUES (?, ?)",
+                [groupId, userIdToAdd]
+            );
+        }
+
+        res.send("People invited to the group! <a href='/messages/" + groupId + "'>Go to Chat</a>");
+    } catch (err) {
+        console.error("Error inviting users to group:", err);
+        res.send("Error inviting users.");
+    }
+});
+
 
 app.post("/addReaction/:messageId", async (req, res) => {
     if (!req.session.authenticated) {
