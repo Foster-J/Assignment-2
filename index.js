@@ -1,24 +1,25 @@
-require("./utils.js")
-require('dotenv').config();
-const express = require('express');
-const session = require('express-session');
-const mysql = require('mysql2/promise');
-const MongoStore = require('connect-mongo');
-const bcrypt = require('bcrypt');
+require("./utils.js");
+require("dotenv").config();
+const express = require("express");
+const session = require("express-session");
+const mysql = require("mysql2/promise");
+const MongoStore = require("connect-mongo");
+const bcrypt = require("bcrypt");
 const saltRounds = 12;
+
 global.dbPromise = connectDB(); // Store the database connection promise
 
 const app = express();
-
-app.use(express.static('public'));
+app.use(express.static("public"));
+app.use(express.urlencoded({ extended: true }));
+app.use(express.json());
 
 const port = process.env.PORT || 3000;
+const Joi = require("joi");
 
-const Joi = require('joi')
+const expireTime = 3600000; // 1 hour in milliseconds
 
-const expireTime = 3600000 //1 hour in milliseconds
-
-/* my secret info from env file */
+/* Secret info from .env */
 const mongoUrl = process.env.MONGODB_URI;
 const mongodb_host = process.env.MONGODB_HOST;
 const mongodb_user = process.env.MONGODB_USER;
@@ -26,358 +27,527 @@ const mongodb_password = process.env.MONGODB_PASSWORD;
 const mongodb_database = process.env.MONGODB_DATABASE;
 const mongodb_session_secret = process.env.MONGODB_SESSION_SECRET;
 const node_session_secret = process.env.NODE_SESSION_SECRET;
-/* end of env secret info */
 
-var {database} = include('databaseConnection');
-
-const userCollection = database.db(mongodb_database).collection('users');
-
-app.use(express.urlencoded({extended: false}));
-
-var mongoStore = MongoStore.create({
-    mongoUrl: `mongodb+srv://${mongodb_user}:${mongodb_password}@${mongodb_host}/sessions`,
-    crypto: {
-        secret: mongodb_session_secret
-    }
-});
-
+/* Database Connection */
 async function connectDB() {
     const db = await mysql.createConnection({
         host: process.env.MYSQL_HOST,
-        port: process.env.MYSQL_PORT, 
+        port: process.env.MYSQL_PORT,
         user: process.env.MYSQL_USER,
         password: process.env.MYSQL_PASSWORD,
         database: process.env.MYSQL_DATABASE,
-        ssl: {
-            rejectUnauthorized: false 
-        }
+        ssl: { rejectUnauthorized: false },
     });
 
     console.log("Connected to Aiven MySQL database.");
     return db;
 }
-connectDB().then(connection => {
-    global.db = connection; 
-}).catch(err => {
-    console.error("Database connection failed:", err);
+
+connectDB()
+    .then((connection) => {
+        global.db = connection;
+    })
+    .catch((err) => {
+        console.error("Database connection failed:", err);
+    });
+
+/* Session Setup */
+var mongoStore = MongoStore.create({
+    mongoUrl: `mongodb+srv://${mongodb_user}:${mongodb_password}@${mongodb_host}/sessions`,
+    crypto: { secret: mongodb_session_secret },
 });
 
-app.use(session({
-    secret: node_session_secret,
-    store: mongoStore,
-    saveUninitialized: false,
-    resave: false
-}
-));
+app.use(
+    session({
+        secret: node_session_secret,
+        store: mongoStore,
+        saveUninitialized: false,
+        resave: false,
+    })
+);
 
+/* Utility Function */
 function escapeHTML(str) {
     return str
-        .replace(/&/g, "&amp;")  // Convert & to &amp;
-        .replace(/</g, "&lt;")   // Convert < to &lt;
-        .replace(/>/g, "&gt;")   // Convert > to &gt;
-        .replace(/"/g, "&quot;") // Convert " to &quot;
-        .replace(/'/g, "&#039;"); // Convert ' to &#039;
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
 }
 
-app.get('/', (req, res) => {
-    if (req.session.authenticated) {
-        var safeUserName = escapeHTML(req.session.username);
-        var html = `
-    Hello, ${safeUserName}!
-    <br>    
-    <form action='members' method='get'>
-    <button>Go to Members Area</button>
-    </form>
-    <form action='logout' method='get'>
-    <button>Logout</button>
-    </form>
-    `;
-    res.send(html);
-        
-    } else {
-    var html = `
-    <form action='signup' method='get'>
-    <button>Sign up</button>
-    </form>
-    <form action='login' method='get'>
-    <button>Login</button>
-    </form>
-    `;
-    res.send(html);
-    }
-});
+const isUserPartOfRoom = async (userId, chatRoomId) => {
+    const [rows] = await global.db.execute(
+        "SELECT * FROM Room_Member WHERE Person_ID = ? AND ChatRoom_ID = ?",
+        [userId, chatRoomId]
+    );
+    return rows.length > 0; // Returns true if user is part of the room
+};
 
-app.get('/signup', (req, res) => {
-    var html = `
-    create user
-    <form action='/submitUser' method='post'>
-    <input name='username' type='text' placeholder='name'>
-    <br>
-    <input name='email' type='text' placeholder='email'>
-    <br>
-    <input name='password' type='password' placeholder='password'>
-    <br>
-    <button>Submit</button>
-    </form>
-    `;
+// Middleware to check if the user is part of the room
+async function checkRoomAuthorization(req, res, next) {
+    const userId = req.session.userId;
+    const groupId = req.params.groupId;
 
-    res.send(html);
-});
-
-app.get('/login', (req, res) => {
-    var html = `
-    log in
-    <form action='/loggingin' method='post'>
-    <input name='email' type='text' placeholder='email'>
-    <br>
-    <input name='password' type='password' placeholder='password'>
-    <br>
-    <button>Submit</button>
-    </form>
-    `;
-    res.send(html);
-});
-
-app.post('/submitUser', async (req, res) => {
-    var username = req.body.username;
-    var email = req.body.email;
-    var password = req.body.password;
-
-    const schema = Joi.object(
-        {
-            username: Joi.string().alphanum().max(20).required(),
-            email: Joi.string().required(),
-            password: Joi.string().max(20).required()
-        });
-        const validationResult = schema.validate({username, email, password});
-
-        if (validationResult.error != null){
-            console.log(validationResult.error);
-            res.redirect("/signup");
-            return;
-        }
-
-        try {
-            // Insert into MySQL database
-            var hashedPassword = await bcrypt.hash(password, saltRounds);
-            const query = `INSERT INTO users (username, email, password) VALUES (?, ?, ?)`;
-            await db.execute(query, [username, email, hashedPassword])
-
-            console.log("User added to MySQL database");
-
-            req.session.authenticated = true;
-            req.session.username = username;
-            req.session.email = email;
-            req.session.cookie.maxAge = expireTime;
-
-            res.redirect('/')
-        } catch (err) {
-            console.error("Error inserting user:", err);
-            res.send('Error creating account. <a href="/signup">Try again</a>');
-        }
-
-});
-
-app.get('/chat', async (req, res) => {
-    if (!req.session.authenticated) {
-        return res.status(401).send('Unauthorized. Please <a href="/login">log in</a>.');
+    if (!userId || !groupId) {
+        return res.status(400).send("User or group ID is missing.");
     }
 
     try {
-        const [groups] = await db.execute(`
-            SELECT g.id, g.name, 
-                (SELECT MAX(sent_at) FROM messages WHERE group_id = g.id) AS last_message_time,
-                (SELECT COUNT(*) FROM messages WHERE group_id = g.id AND sent_at > (SELECT last_logout FROM users WHERE id = ?)) AS unread_messages
-            FROM groups g
-            JOIN group_members gm ON g.id = gm.group_id
-            WHERE gm.user_id = ?
-        `, [req.session.user_id, req.session.user_id]);
+        const [result] = await global.db.execute(
+            "SELECT * FROM Room_Member WHERE Person_ID = ? AND ChatRoom_ID = ?",
+            [userId, groupId]
+        );
 
-        let html = `<h2>Your Chat Groups</h2>`;
-        html += `<p>Total Groups: ${groups.length}</p>`;
-        html += `<ul>`;
-        groups.forEach(group => {
-            html += `<li>
-                        <a href="/chat/${group.id}">${group.name}</a> 
-                        - Last message: ${group.last_message_time || 'No messages yet'} 
-                        - Unread: ${group.unread_messages}
-                    </li>`;
-        });
-        html += `</ul>`;
-        html += `<form action="/chat/create" method="post">
-                    <input type="text" name="group_name" placeholder="New group name" required>
-                    <button type="submit">Create Group</button>
-                 </form>`;
-        
-        res.send(html);
+        if (result.length === 0) {
+            return res.status(403).send("You are not a member of this chat room.");
+        }
+
+        next();  // User is authorized to access the room
     } catch (err) {
-        console.error("Error fetching chat groups:", err);
-        res.status(500).send("Error loading chat groups.");
+        console.error("Error checking room authorization:", err);
+        return res.status(500).send("An error occurred while checking room authorization.");
+    }
+}
+
+
+
+/* Homepage */
+app.get("/", async (req, res) => {
+    if (req.session.authenticated) {
+        var safeUserName = escapeHTML(req.session.username);
+        res.send(`
+            Hello, ${safeUserName}! <br>    
+            <a href='/groups'>View My Groups</a> <br>
+            <a href='/logout'>Logout</a>
+        `);
+    } else {
+        res.send(`
+            <a href='/signup'>Sign up</a> <br>
+            <a href='/login'>Login</a>
+        `);
     }
 });
 
-app.post('/chat/create', async (req, res) => {
+/* SIGNUP */
+app.get("/signup", (req, res) => {
+    res.send(`
+        <h2>Signup</h2>
+        <form action="/signup" method="post">
+            <input type="text" name="username" placeholder="Username" required><br>
+            <input type="email" name="email" placeholder="Email" required><br>
+            <input type="password" name="password" placeholder="Password" required><br>
+            <button type="submit">Sign Up</button>
+        </form>
+        <a href="/">Back</a>
+    `);
+});
+
+app.post("/signup", async (req, res) => {
+    const { username, email, password } = req.body;
+
+    const schema = Joi.object({
+        username: Joi.string().alphanum().min(3).max(20).required(),
+        email: Joi.string().email().required(),
+        password: Joi.string()
+            .min(10)
+            .pattern(/[a-z]/, 'lowercase') // At least one lowercase letter
+            .pattern(/[A-Z]/, 'uppercase') // At least one uppercase letter
+            .pattern(/[0-9]/, 'number') // At least one number
+            .pattern(/[\W_]/, 'special character') // At least one special character
+            .required()
+            .messages({
+                'string.min': 'Password must be at least 10 characters long.',
+                'string.pattern.base': 'Password must contain at least one lowercase letter, one uppercase letter, one number, and one special character.',
+            }),
+    });
+
+    const validation = schema.validate({ username, email, password });
+    if (validation.error) {
+        return res.send("Invalid input. <a href='/signup'>Try again</a>");
+    }
+
+    const hashedPassword = await bcrypt.hash(password, saltRounds);
+
+    try {
+        await global.db.execute(
+            "INSERT INTO Person (username, email, password_hash) VALUES (?, ?, ?)",
+            [username, email, hashedPassword]
+        );
+        res.redirect("/login");
+    } catch (err) {
+        console.error("Signup error:", err);
+        res.send("Error signing up.");
+    }
+});
+
+/* LOGIN */
+app.get("/login", (req, res) => {
+    res.send(`
+        <h2>Login</h2>
+        <form action="/login" method="post">
+            <input type="text" name="username" placeholder="Username" required><br>
+            <input type="password" name="password" placeholder="Password" required><br>
+            <button type="submit">Login</button>
+        </form>
+        <a href="/">Back</a>
+    `);
+});
+
+app.post("/login", async (req, res) => {
+    const { username, password } = req.body;
+
+    const [users] = await global.db.execute("SELECT * FROM Person WHERE username = ?", [username]);
+
+    if (users.length === 0) {
+        return res.send("User not found. <a href='/login'>Try again</a>");
+    }
+
+    const user = users[0];
+
+    if (await bcrypt.compare(password, user.password_hash)) {
+        req.session.authenticated = true;
+        req.session.username = username;
+        req.session.userId = user.Person_ID;
+        res.redirect("/");
+    } else {
+        res.send("Incorrect password. <a href='/login'>Try again</a>");
+    }
+});
+
+/* LOGOUT */
+app.get("/logout", (req, res) => {
+    req.session.destroy();
+    res.redirect("/");
+});
+
+app.get("/groups", async (req, res) => {
     if (!req.session.authenticated) {
-        return res.status(401).send('Unauthorized. Please <a href="/login">log in</a>.');
+        return res.status(401).send("Unauthorized. <a href='/login'>Login</a>");
+    }
+
+    const userId = req.session.userId;
+
+    try {
+        // Get the groups the user is in
+        const [groups] = await global.db.execute(
+            `SELECT CR.ChatRoom_ID, CR.group_name, 
+                    (SELECT MAX(sent_date) FROM Message WHERE ChatRoom_ID = CR.ChatRoom_ID) AS latest_message_date,
+                    (SELECT COUNT(*) FROM Message WHERE ChatRoom_ID = CR.ChatRoom_ID AND sent_date > IFNULL((SELECT last_viewed FROM Room_Member WHERE Person_ID = ? AND Chatroom_ID = CR.ChatRoom_ID), '2000-01-01')) AS unread_messages
+            FROM Room_Member RM
+            JOIN ChatRoom CR ON RM.Chatroom_ID = CR.ChatRoom_ID
+            WHERE RM.Person_ID = ?`,
+            [userId, userId]
+        );
+
+        // Update last viewed timestamp for unread messages (Mark them as read)
+        await global.db.execute(
+            "UPDATE Room_Member SET last_viewed = NOW() WHERE Person_ID = ?",
+            [userId]
+        );
+
+        let html = `<h2>My Chat Groups</h2>`;
+        html += `<p>Total Groups: ${groups.length}</p>`;
+        html += `<button onclick="location.href='/createGroup'">Create New Group</button>`;
+
+        if (groups.length > 0) {
+            html += "<ul>";
+            groups.forEach((group) => {
+                html += `
+                    <li>
+                        <strong>${group.group_name}</strong> 
+                        <br>Last Message: ${group.latest_message_date || "No messages yet"} 
+                        <br>Unread Messages: ${group.unread_messages}
+                        <br><a href='/messages/${group.ChatRoom_ID}'>View Chat</a>
+                    </li>
+                    <br>
+                `;
+            });
+            html += "</ul>";
+        } else {
+            html += "<p>You are not in any chat groups.</p>";
+        }
+
+        res.send(html);
+    } catch (err) {
+        console.error("Error fetching groups:", err);
+        res.send("Error loading groups.");
+    }
+});
+
+app.get('/createGroup', async (req, res) => {
+    if (!req.session.authenticated) {
+        res.redirect('/login');
+        return;
+    }
+
+    const userId = req.session.userId;
+
+    try {
+        // Fetch all users except the currently logged-in user
+        const [users] = await global.db.execute(
+            "SELECT Person_ID, username FROM Person WHERE Person_ID != ?",
+            [userId]
+        );
+
+        let html = `
+            <h2>Create a New Chat Group</h2>
+            <form action="/createGroup" method="post">
+                <input name="group_name" type="text" placeholder="Group Name" required><br><br>
+                <h3>Select Users to Add to the Group:</h3>
+        `;
+
+        // Generate checkboxes for each user
+        users.forEach(user => {
+            html += `
+                <label>
+                    <input type="checkbox" name="users[]" value="${user.Person_ID}">${user.username}
+                </label><br>
+            `;
+
+        });
+
+        html += `
+                <br><button type="submit">Create</button>
+            </form>
+            <br>
+            <a href="/groups">Back to Groups</a>
+        `;
+
+        res.send(html);
+    } catch (err) {
+        console.error("Error fetching users:", err);
+        res.send("Error loading users.");
+    }
+});
+
+
+
+/* CREATE GROUP */
+app.post("/createGroup", async (req, res) => {
+    if (!req.session.authenticated) {
+        return res.status(401).send("Unauthorized");
     }
 
     const groupName = req.body.group_name;
-    if (!groupName || groupName.trim() === "") {
-        return res.status(400).send("Group name cannot be empty.");
+    const userId = req.session.userId;
+    const selectedUsers = req.body.users || []; // Get selected users, default to an empty array if none selected
+
+    if (!groupName) {
+        return res.status(400).send("Group name is required.");
     }
 
     try {
-        const [result] = await db.execute(`INSERT INTO groups (name) VALUES (?)`, [groupName]);
-        const groupId = result.insertId;
+        // Insert the new group into the ChatRoom table
+        const [result] = await global.db.execute(
+            "INSERT INTO ChatRoom (group_name, start_date) VALUES (?, NOW())",
+            [groupName]
+        );
 
-        await db.execute(`INSERT INTO group_members (group_id, user_id) VALUES (?, ?)`, [groupId, req.session.user_id]);
+        // Get the newly created group's ID
+        const newGroupId = result.insertId;
 
-        res.redirect('/chat');
+        // Insert the creator as a member of the group
+        await global.db.execute(
+            "INSERT INTO Room_Member (ChatRoom_ID, Person_ID) VALUES (?, ?)",
+            [newGroupId, userId]
+        );
+
+        // Insert selected users into the Room_Member table
+        for (const selectedUserId of selectedUsers) {
+            await global.db.execute(
+                "INSERT INTO Room_Member (ChatRoom_ID, Person_ID) VALUES (?, ?)",
+                [newGroupId, selectedUserId]
+            );
+        }
+
+        res.send("Group created! <a href='/groups'>Go to Groups</a>");
     } catch (err) {
-        console.error("Error creating chat group:", err);
-        res.status(500).send("Error creating chat group.");
+        console.error("Error creating group:", err);
+        res.send("Error creating group.");
     }
 });
 
-app.get('/chat/:groupId', async (req, res) => {
+
+
+/* JOIN GROUP */
+app.post("/joinGroup", async (req, res) => {
+    if (!req.session.authenticated) return res.status(401).send("Unauthorized");
+
+    const groupId = req.body.groupId;
+    try {
+        await global.db.execute(
+            "INSERT INTO Room_Member (Chatroom_ID, Person_ID) VALUES (?, ?)",
+            [groupId, req.session.userId]
+        );
+
+        res.send("Joined group! <a href='/groups'>Go back</a>");
+    } catch (err) {
+        console.error("Error joining group:", err);
+        res.send("Error joining group.");
+    }
+});
+
+app.get("/messages/:groupId", checkRoomAuthorization ,async (req, res) => {
     if (!req.session.authenticated) {
-        return res.status(401).send('Unauthorized. Please <a href="/login">log in</a>.');
+        return res.status(401).send("Unauthorized");
     }
 
+    const userId = req.session.userId;
     const groupId = req.params.groupId;
 
     try {
-        const [group] = await db.execute(`SELECT name FROM groups WHERE id = ?`, [groupId]);
-        if (group.length === 0) {
+        const [groupNameResult] = await global.db.execute(
+            "SELECT group_name FROM ChatRoom WHERE ChatRoom_ID = ?",
+            [groupId]
+        );
+
+        if (groupNameResult.length === 0) {
             return res.status(404).send("Group not found.");
         }
 
-        const [isMember] = await db.execute(`SELECT * FROM group_members WHERE group_id = ? AND user_id = ?`, [groupId, req.session.user_id]);
-        if (isMember.length === 0) {
-            return res.status(403).send("You are not authorized to view this chat.");
-        }
+        const groupName = groupNameResult[0].group_name;
 
-        const [messages] = await db.execute(`
-            SELECT m.id, m.message, m.sent_at, u.username 
-            FROM messages m
-            JOIN users u ON m.user_id = u.id
-            WHERE m.group_id = ?
-            ORDER BY m.sent_at ASC
-        `, [groupId]);
+        const [lastViewedResult] = await global.db.execute(
+            "SELECT last_viewed FROM Room_Member WHERE Person_ID = ? AND ChatRoom_ID = ?",
+            [userId, groupId]
+        );
 
-        let html = `<h2>Chat Group: ${group[0].name}</h2>`;
-        html += `<ul>`;
-        messages.forEach(msg => {
-            html += `<li><strong>${msg.username}</strong>: ${msg.message} <small>(${msg.sent_at})</small></li>`;
+        const lastViewed = lastViewedResult.length > 0 ? lastViewedResult[0].last_viewed : "2000-01-01 00:00:00";
+
+        const [messages] = await global.db.execute(
+            `SELECT M.Message_ID, M.body_text, M.sent_date, P.username, M.Person_ID,
+                    (SELECT GROUP_CONCAT(E.emoji SEPARATOR ' ') FROM EmojiReaction E WHERE E.Message_ID = M.Message_ID) AS reactions
+            FROM Message M
+            JOIN Person P ON M.Person_ID = P.Person_ID
+            WHERE M.ChatRoom_ID = ?
+            ORDER BY M.sent_date ASC`,
+            [groupId]
+        );
+
+        let html = `
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>${groupName}</title>
+                <link rel="stylesheet" href="/style.css">
+            </head>
+            <body>
+                <div class="chat-container">
+                    <h2>${groupName}</h2>
+                    <div id="chat-box">`;
+
+        let unreadSeparatorAdded = false;
+
+        messages.forEach((msg) => {
+            const msgClass = msg.Person_ID === userId ? "sent" : "received";
+            const isUnread = new Date(msg.sent_date) > new Date(lastViewed);
+
+            if (isUnread && !unreadSeparatorAdded) {
+                html += `<div class="unread-separator">Unread Messages Below</div>`;
+                unreadSeparatorAdded = true;
+            }
+
+            // Render message with reactions as image emojis
+            const emojiImages = msg.reactions ? msg.reactions.split(' ').map(emoji => {
+                return `<img src="/emojis/${emoji}.png" alt="${emoji}" class="emoji-image">`;
+            }).join(' ') : 'No reactions yet';
+
+            html += `
+                <div class="message-container ${msgClass}">
+                    <div class="message ${msgClass}">
+                        <strong>${msg.username}</strong>: ${msg.body_text}
+                        <br><small>${msg.sent_date}</small>
+                        <div class="reactions">
+                            ${emojiImages}
+                        </div>
+                        <button class="reaction-btn" data-message-id="${msg.Message_ID}">+</button>
+                        <div class="emoji-picker" id="emoji-picker-${msg.Message_ID}" style="display: none;">
+                            <img src="/emojis/thumbs_up.png" alt="thumbs_up" class="emoji-image" data-emoji="thumbs_up">
+                            <img src="/emojis/thumbs_down.png" alt="thumbs_down" class="emoji-image" data-emoji="thumbs_down">
+                            
+                        </div>
+                    </div>
+                </div>`;
         });
-        html += `</ul>`;
 
-        html += `<form action="/chat/${groupId}/send" method="post">
-                    <input type="text" name="message" placeholder="Type a message" required>
-                    <button type="submit">Send</button>
-                 </form>`;
+        html += `
+                    </div>
+                    <form action="/sendMessage/${groupId}" method="POST">
+                        <input type="text" name="message" required>
+                        <button type="submit">Send</button>
+                    </form>
+                </div>
+            </body>
+            <script src="/script.js"></script>
+            </html>`;
+
+        await global.db.execute(
+            "UPDATE Room_Member SET last_viewed = NOW() WHERE Person_ID = ? AND ChatRoom_ID = ?",
+            [userId, groupId]
+        );
 
         res.send(html);
     } catch (err) {
-        console.error("Error loading chat:", err);
-        res.status(500).send("Error loading chat messages.");
+        console.error("Error fetching messages:", err);
+        res.send("Error loading messages.");
     }
 });
 
-app.post('/chat/:groupId/send', async (req, res) => {
+app.post("/sendMessage/:chatRoomId", async (req, res) => {
     if (!req.session.authenticated) {
-        return res.status(401).send('Unauthorized. Please <a href="/login">log in</a>.');
+        return res.status(401).send("Unauthorized");
     }
 
-    const groupId = req.params.groupId;
-    const message = req.body.message.trim();
+    const chatRoomId = req.params.chatRoomId;
+    const userId = req.session.userId;
+    const { message } = req.body;
 
-    if (!message) {
+    if (!message || message.trim() === "") {
         return res.status(400).send("Message cannot be empty.");
     }
 
     try {
-        const [isMember] = await db.execute(`SELECT * FROM group_members WHERE group_id = ? AND user_id = ?`, [groupId, req.session.user_id]);
-        if (isMember.length === 0) {
-            return res.status(403).send("You are not authorized to send messages in this chat.");
-        }
+        await global.db.execute(
+            "INSERT INTO Message (Person_ID, ChatRoom_ID, sent_date, body_text) VALUES (?, ?, NOW(), ?)",
+            [userId, chatRoomId, message]
+        );
 
-        await db.execute(`INSERT INTO messages (group_id, user_id, message) VALUES (?, ?, ?)`, [groupId, req.session.user_id, message]);
-
-        res.redirect(`/chat/${groupId}`);
+        res.redirect(`/messages/${chatRoomId}`);
     } catch (err) {
         console.error("Error sending message:", err);
         res.status(500).send("Error sending message.");
     }
 });
 
-
-app.post('/loggingin', async (req, res) => {
-    var email = req.body.email;
-    var password = req.body.password;
-
-    if (!email || !password) {
-        res.send('Invalid email/password combination. <br> <a href="/login">Try again</a>');
-        return;
+app.post("/addReaction/:messageId", async (req, res) => {
+    if (!req.session.authenticated) {
+        return res.status(401).send("Unauthorized");
     }
 
-    const schema = Joi.string().email().required();
-    const validationResult = schema.validate(email);
-
-    if (validationResult.error) {
-        res.send('Invalid email. <a href="/login">Try again</a>');
-        return;
-    }
+    const userId = req.session.userId;
+    const messageId = req.params.messageId;
+    const emoji = req.body.emoji;
 
     try {
-        // Query user from MySQL database
-        const db = await global.dbPromise;
-        const [rows] = await global.db.execute(
-            `SELECT username, password FROM users WHERE email = ?`,
-            [email]
+        // Insert emoji reaction into the database
+        await global.db.execute(
+            "INSERT INTO EmojiReaction (Message_ID, Person_ID, emoji) VALUES (?, ?, ?)",
+            [messageId, userId, emoji]
         );
 
-        if (rows.length !== 1) {
-            console.log("User not found");
-            res.send('Invalid email/password combination. <a href="/login">Try again</a>');
-            return;
-        }
-
-        const user = rows[0];
-
-        if (await bcrypt.compare(password, user.password)) {
-            console.log("Correct password");
-
-            req.session.authenticated = true;
-            req.session.username = user.username;
-            req.session.email = email;
-            req.session.cookie.maxAge = expireTime;
-
-            res.redirect('/');
-        } else {
-            res.send('Invalid password. <a href="/login">Try again</a>');
-        }
+        // Redirect back to the messages page to update the reactions
+        res.redirect(`/messages/${req.params.groupId}`);
     } catch (err) {
-        console.error("Error logging in:", err);
-        res.send('Error logging in. <a href="/login">Try again</a>');
+        console.error("Error adding reaction:", err);
+        res.status(500).send("Error adding reaction.");
     }
 });
 
-app.get('/loginSubmit', (req,res) => {
-    var html = 'Invalid email/password combination <br> <a href="/login">Try again</a>';
-    res.send(html);
-})
 
-app.get('/logout', (req, res) => {
-    req.session.destroy();
-    res.redirect('/');
-});
 
-app.get("*", (req,res) => {
-	res.status(404);
-	res.send("Page not found - 404");
-})
+
 
 app.listen(port, () => {
-	console.log("Node application listening on port "+port);
-}); 
+    console.log("Server running on port " + port);
+});
