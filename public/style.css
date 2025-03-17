@@ -1,0 +1,109 @@
+/* General message container */
+.message-container {
+    display: flex;
+    margin-bottom: 10px;
+}
+
+/* Message styling for the logged-in user (sent message) */
+.message-container.sent {
+    justify-content: flex-end; /* Align sent messages to the right */
+}
+
+/* Message styling for others (received message) */
+.message-container.received {
+    justify-content: flex-start; /* Align received messages to the left */
+}
+
+/* Message box for the user on the right */
+.message-container .message {
+    max-width: 60%; /* Make it smaller */
+    padding: 10px;
+    background-color: #007bff; /* Blue for sent messages */
+    color: white;
+    border-radius: 8px;
+    word-wrap: break-word; /* Ensure text doesn't overflow */
+}
+
+/* Message box for other users on the left */
+.message-container .message.received {
+    max-width: 60%;
+    padding: 10px;
+    background-color: #f1f1f1; /* Light gray for received messages */
+    color: #333;
+    border-radius: 8px;
+    word-wrap: break-word;
+}
+
+/* Sent date styling */
+.message small {
+    font-size: 0.8rem;
+    color: #ccc;
+    display: block;
+    margin-top: 5px;
+}
+
+/* Container for all messages */
+#chat-box {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    max-height: 400px;
+    overflow-y: auto;
+}
+
+/* The form styling */
+form {
+    display: flex;
+    align-items: center;
+    margin-top: 20px;
+}
+
+form input[type="text"] {
+    width: 80%; /* Make the input smaller */
+    padding: 10px;
+    border-radius: 5px;
+    border: 1px solid #ccc;
+}
+
+form button {
+    padding: 10px 20px;
+    margin-left: 10px;
+    background-color: #007bff;
+    color: white;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+}
+
+form button:hover {
+    background-color: #0056b3;
+}
+
+/* Line to separate read and unread messages */
+.unread-separator {
+    border: 0;
+    border-top: 2px solid red;
+    margin: 20px 0;
+    width: 100%;
+}
+
+/* Unread messages styling */
+.unread-message {
+    background-color: #ffcccc; /* Light red background for unread messages */
+    color: black;
+    padding: 10px;
+    border-radius: 8px;
+    max-width: 60%;
+    word-wrap: break-word;
+}
+
+/* Adjusting for sent and received styles */
+.unread-message.sent {
+    background-color: #ffb3b3; /* Slightly lighter red for the user's unread messages */
+}
+
+.unread-message.received {
+    background-color: #ffcccc; /* Lighter red for others' unread messages */
+}
+
+
