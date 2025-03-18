@@ -397,6 +397,12 @@ app.get("/messages/:groupId", checkRoomAuthorization, async (req, res) => {
     const groupId = req.params.groupId;
 
     try {
+        // Update last_viewed to the current time
+        await global.db.execute(
+            "UPDATE Room_Member SET last_viewed = NOW() WHERE Person_ID = ? AND ChatRoom_ID = ?",
+            [userId, groupId]
+        );
+        
         const [groupNameResult] = await global.db.execute(
             "SELECT group_name FROM ChatRoom WHERE ChatRoom_ID = ?",
             [groupId]
@@ -438,6 +444,8 @@ app.get("/messages/:groupId", checkRoomAuthorization, async (req, res) => {
             <head>
                 <title>${groupName}</title>
                 <link rel="stylesheet" href="/style.css">
+                <script src="/script.js" defer></script>
+
             </head>
             <body>
                 <div class="chat-container">
