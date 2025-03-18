@@ -444,6 +444,7 @@ app.get("/messages/:groupId", checkRoomAuthorization, async (req, res) => {
                     <h2>${groupName}</h2>
 
                     <!-- Invite More People Section (At the top) -->
+
                     <form action="/inviteToGroup/${groupId}" method="post">
                         <select name="users[]" multiple>
         `;
@@ -496,6 +497,13 @@ app.get("/messages/:groupId", checkRoomAuthorization, async (req, res) => {
         });
 
         html += `</div>`;
+        html += `
+        </div>
+        <form action="/sendMessage/${groupId}" method="POST">
+            <input type="text" name="message" required>
+            <button type="submit">Send</button>
+        </form>
+        </div>`;
 
         html += `<a href="/groups">Back to Groups</a>`;
         html += `</div></body></html>`;
